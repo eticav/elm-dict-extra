@@ -10,15 +10,20 @@ tests =
   describe "Zipper Insertions"
     [ foldlIfTest
     ]
-
-insert : comparable->ExtDict.Dict comparable String->ExtDict.Dict comparable String
+type alias Acc = { size: Int
+                 }
+    
+initialAcc = { size=0
+             }
+  
+insert : comparable->ExtDict.Dict comparable String Acc->ExtDict.Dict comparable String Acc
 insert key dict =
   ExtDict.insert key (toString key) dict
 
 foldlIfCheck : String->List Int->Int->Int->List Int->Test
 foldlIfCheck description list min max expected=
   let
-    extDict = List.foldr insert ExtDict.empty list    
+    extDict = List.foldr insert (ExtDict.empty Basics.compare initialAcc) list    
     results = ExtDict.foldlIf (rangeCompare min max) (\k v acc-> k::acc) [] extDict
   in
     test description (\_->Expect.equalLists (List.sort results) (List.sort expected))
