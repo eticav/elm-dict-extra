@@ -9,6 +9,7 @@ module ExtDict exposing
   , keys, values
   , toList, fromList
   , foldlIf
+  , accumulate, accumulation
   )
 
 {-| A dictionary mapping unique keys to values. The keys can be any k
@@ -70,6 +71,9 @@ type Dict k v acc= Dict { dict : DictImpl k v
                         , compare : k->k->Order
                         , acc : acc
                         , initial : acc
+                        , add : (k,v)->acc->acc
+                        , remove : (k,v)->acc->acc
+                        , update : (k,v)->(k,v)->acc->acc                                
                         }
 
 type DictImpl k v
@@ -83,8 +87,28 @@ empty compareFun initial=
        , compare =compareFun
        , acc =initial
        , initial=initial
+       , add = (\_ acc->acc)
+       , remove = (\_ acc->acc)
+       , update = (\_ _ acc->acc)
        }
-      
+
+accumulate : ((k,v)->acc->acc)->
+             ((k,v)->acc->acc)->
+             Maybe ((k,v)->(k,v)->acc->acc)->
+             Dict k v acc->
+             Dict k v acc
+accumulate add remove update (Dict dict) =
+  Dict { dict
+         | add=add
+         , remove=remove
+         , update=Maybe.withDefault (\o i acc -> acc |> remove o |> add i) update         
+         , acc = foldlImpl (\k v acc -> add (k,v) acc) dict.initial dict.dict
+       }
+
+accumulation : Dict k v acc->acc
+accumulation (Dict dict) =
+  dict.acc
+  
 {-| Create an emptyImpl dictionary. -}
 emptyImpl : DictImpl k v
 emptyImpl =
@@ -199,10 +223,8 @@ no changes are made. -}
 remove : k -> Dict k v acc -> Dict k v acc
 remove key dict =
   update key (always Nothing) dict
-
          
-type Flag = Insert | Remove | Same
-
+type Flag k v = Insert (k,v)| Remove (k,v) | Same (k,v) (k,v) | SameEmpty
           
 {-| Update the value of a dictionary for a specific key with a given function. -}
 update : k -> (Maybe v -> Maybe v) -> Dict k v acc-> Dict k v acc
@@ -213,50 +235,56 @@ update k alter (Dict dict) =
         Empty _ ->
           case alter Nothing of
             Nothing ->
-              (Same, emptyImpl)
+              (SameEmpty, emptyImpl)
 
             Just v ->
-              (Insert, Node Red k v emptyImpl emptyImpl)
+              (Insert (k,v), Node Red k v emptyImpl emptyImpl)
 
         Node clr key value left right ->
           case dict.compare k key of
             EQ ->
               case alter (Just value) of
                 Nothing ->
-                  (Remove, rem clr left right)
+                  (Remove (key,value), rem clr left right)
                 Just newValue ->
-                  (Same, Node clr key newValue left right)
+                  (Same (key,value) (key,newValue), Node clr key newValue left right)
 
             LT ->
               let (flag, newLeft) = up left in
               case flag of
-                Same ->
-                  (Same, Node clr key value newLeft right)
-                Insert ->
-                  (Insert, balance clr key value newLeft right)
-                Remove ->
-                  (Remove, bubble clr key value newLeft right)
+                Same o i->
+                  (Same o i, Node clr key value newLeft right)
+                SameEmpty->
+                  (SameEmpty, Node clr key value newLeft right)
+                Insert i->
+                  (Insert i, balance clr key value newLeft right)
+                Remove o->
+                  (Remove o, bubble clr key value newLeft right)
 
             GT ->
               let (flag, newRight) = up right in
               case flag of
-                Same ->
-                  (Same, Node clr key value left newRight)
-                Insert ->
-                  (Insert, balance clr key value left newRight)
-                Remove ->
-                  (Remove, bubble clr key value left newRight)
+                Same o i->
+                  (Same o i, Node clr key value left newRight)
+                SameEmpty ->
+                  (SameEmpty, Node clr key value left newRight)
+                Insert i->
+                  (Insert i, balance clr key value left newRight)
+                Remove r->
+                  (Remove r, bubble clr key value left newRight)
 
     (flag, updatedDictImpl) =
       up dict.dict
   in
     case flag of
-      Same ->
+      Same o i->
+        Dict {dict|dict=updatedDictImpl, acc=dict.update o i dict.acc}
+      SameEmpty->
         Dict {dict|dict=updatedDictImpl}
-      Insert ->
-        Dict {dict|dict=ensureBlackRoot updatedDictImpl}
-      Remove ->
-        Dict {dict|dict=blacken updatedDictImpl}
+      Insert i->
+        Dict {dict|dict=ensureBlackRoot updatedDictImpl, acc=dict.add i dict.acc}
+      Remove o->
+        Dict {dict|dict=blacken updatedDictImpl, acc=dict.remove o dict.acc}
 
              
 singleton : (k->k->Order)->acc-> k -> v -> Dict k v acc
